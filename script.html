@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Requêtes entre provinces et bâtiments</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v10.3.1/ol.css">
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+            display: flex;
+        }
+
+        #sidebar {
+            width: 300px;
+            background: white;
+            border-right: 1px solid #ccc;
+            padding: 10px;
+            overflow-y: auto;
+        }
+
+        #map {
+            flex: 1;
+            height: 100%;
+            position: relative;
+        }
+
+        /* Style de la barre latérale */
+        #sidebar h2 {
+            font-family: Arial, sans-serif;
+            font-size: 18px;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .query-result {
+            margin-top: 20px;
+            font-family: Arial, sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <div id="sidebar">
+        <h2>Suivi des conséquences<br>du tremblement de terre 2023</h2>
+
+        <!-- Sélection de la province -->
+        <label for="province-select">Choisissez une province :</label>
+        <select id="province-select">
+            <option value="">Chargement des provinces...</option>
+        </select>
+        <button id="run-query">Exécuter la requête</button>
+
+        <!-- Résultats -->
+        <div id="query-result" class="query-result"></div>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/ol@v10.3.1/dist/ol.js"></script>
+    <script>
+        const mapboxAccessToken = 'pk.eyJ1IjoibGFtc2FocmlpbWFuZSIsImEiOiJjbTRvNGxzMngwYm95Mmtxc3djZ2NsazVxIn0.CVontsWZE5y3lQSvrvdgKw';
+
+        // Couches Mapbox
+        const satelliteLayer = new ol.layer.Tile({
+            source: new ol.source.XYZ({
+                url: `https://api.mapbox.com/styles/v1/mapbox/satellite-v9/tiles/{z}/{x}/{y}?access_token=${mapboxAccessToken}`,
+            }),
+            visible: true,
+        });
+
+        // Initialisation de la carte
+        const map = new ol.Map({
+            target: 'map',
+            layers: [satelliteLayer],
+            view: new ol.View({
+                center: ol.proj.fromLonLat([-8.5, 31]), // Coordonnées centrées
+                zoom: 7, // Zoom ajusté
+            }),
+        });
+
+        const provinceSelect = document.getElementById('province-select');
+        const queryResult = document.getElementById('query-result');
+
+        // Chargement dynamique des provinces
+        fetch("http://localhost:8080/geoserver/TRIAL/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=TRIAL:provinces&outputFormat=application/json")
+            .then(response => response.json())
+            .then(data => {
+                // Vider la liste existante
+                provinceSelect.innerHTML = '';
+                
+                // Ajouter les options dynamiquement
+                data.features.forEach(feature => {
+                    const provinceName = feature.properties.Nom_provi; // Nom de la province
+                    const option = document.createElement('option');
+                    option.value = provinceName;
+                    option.textContent = provinceName;
+                    provinceSelect.appendChild(option);
+                });
+            })
+            .catch(error => {
+                console.error("Erreur lors du chargement des provinces :", error);
+                provinceSelect.innerHTML = '<option value="">Erreur de chargement</option>';
+            });
+
+        // Requêtes dynamiques pour les bâtiments
+        document.getElementById('run-query').addEventListener('click', () => {
+            const selectedProvince = provinceSelect.value;
+
+            if (!selectedProvince) {
+                queryResult.innerHTML = 'Veuillez sélectionner une province.';
+                return;
+            }
+
+            // URL pour les bâtiments endommagés
+            const damagedURL = `http://localhost:8080/geoserver/TRIAL/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=TRIAL:damagedprov&maxFeatures=50&outputFormat=application%2Fjson&CQL_FILTER=Nom_provin='${selectedProvince}'`;
+
+            // URL pour les bâtiments non touchés
+            const nonToucheURL = `http://localhost:8080/geoserver/TRIAL/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=TRIAL:nntoucheprov&maxFeatures=50&outputFormat=application%2Fjson&CQL_FILTER=Nom_provin='${selectedProvince}'`;
+
+            // Requête pour les bâtiments endommagés
+            fetch(damagedURL)
+                .then(response => response.json())
+                .then(damagedData => {
+                    const damagedCount = damagedData.features.length;
+
+                    // Requête pour les bâtiments non touchés
+                    fetch(nonToucheURL)
+                        .then(response => response.json())
+                        .then(nonToucheData => {
+                            const nonToucheCount = nonToucheData.features.length;
+
+                            // Afficher les résultats
+                            queryResult.innerHTML = `
+                                <h4>Résultats pour ${selectedProvince} :</h4>
+                                <ul>
+                                    <li>Bâtiments endommagés : ${damagedCount}</li>
+                                    <li>Bâtiments non touchés : ${nonToucheCount}</li>
+                                </ul>
+                            `;
+                        })
+                        .catch(error => {
+                            queryResult.innerHTML = `Erreur lors de la récupération des bâtiments non touchés : ${error}`;
+                        });
+                })
+                .catch(error => {
+                    queryResult.innerHTML = `Erreur lors de la récupération des bâtiments endommagés : ${error}`;
+                });
+        });
+    </script>
+</body>
+</html>
