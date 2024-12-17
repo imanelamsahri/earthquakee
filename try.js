@@ -1,107 +1,274 @@
+import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@latest/+esm";
+import * as turf from "https://cdn.jsdelivr.net/npm/@turf/turf/+esm";
+
 mapboxgl.accessToken = 'pk.eyJ1IjoibGFtc2FocmlpbWFuZSIsImEiOiJjbTRvNGxzMngwYm95Mmtxc3djZ2NsazVxIn0.CVontsWZE5y3lQSvrvdgKw';
 
-let map = new mapboxgl.Map({
-  container: 'map',
-  style: 'mapbox://styles/mapbox/streets-v11',
-  center: [-8.5, 31],
-  zoom: 7,
-});
+let map;
+let db, conn;
+let provincesData, damagedBuildingsData, untouchedBuildingsData, nationalRoutesData, provincialRoutesData;
+let currentStyleIndex = 0;
 
-let drawings = {
-  type: 'FeatureCollection',
-  features: [],
-};
+const mapStyles = [
+  'mapbox://styles/mapbox/streets-v11',
+  'mapbox://styles/mapbox/outdoors-v11',
+  'mapbox://styles/mapbox/light-v11',
+  'mapbox://styles/mapbox/dark-v11',
+  'mapbox://styles/mapbox/satellite-v9',
+  'mapbox://styles/mapbox/satellite-streets-v11',
+];
 
-let tempCoordinates = [];
-let activeMode = null; // Modes : "draw", "measure", null
+let draw;
+let buildingChart; // Variable pour stocker le graphe
 
-// Ajouter une source et une couche pour les dessins
-map.on('load', () => {
-  map.addSource('drawings', {
-    type: 'geojson',
-    data: drawings,
+// Initialiser la carte
+function initMap() {
+  map = new mapboxgl.Map({
+    container: 'map',
+    style: mapStyles[currentStyleIndex],
+    center: [-8.5, 31],
+    zoom: 7,
   });
 
+  map.addControl(new mapboxgl.NavigationControl());
+}
+
+// Ajouter l'outil de mesure
+function addMeasurementTool() {
+  draw = new MapboxDraw({
+    displayControlsDefault: false,
+    controls: {
+      polygon: true,
+      line_string: true,
+      point: true,
+      trash: true,
+    },
+    styles: [
+      {
+        id: 'gl-draw-line',
+        type: 'line',
+        paint: {
+          'line-color': '#FF0000',
+          'line-width': 2,
+        },
+      },
+      {
+        id: 'gl-draw-polygon-fill',
+        type: 'fill',
+        paint: {
+          'fill-color': '#0000FF',
+          'fill-opacity': 0.5,
+        },
+      },
+    ],
+  });
+
+  map.addControl(draw, 'top-left');
+
+  map.on('draw.create', updateMeasurements);
+  map.on('draw.update', updateMeasurements);
+  map.on('draw.delete', () => {
+    document.getElementById('info-bar').textContent = 'Outil de mesure prêt.';
+  });
+}
+
+// Fonction pour calculer les mesures
+function updateMeasurements() {
+  const data = draw.getAll();
+  let totalDistance = 0;
+  let totalArea = 0;
+
+  data.features.forEach(feature => {
+    if (feature.geometry.type === 'LineString') {
+      totalDistance += turf.length(feature); // Calculer la distance
+    } else if (feature.geometry.type === 'Polygon') {
+      totalArea += turf.area(feature); // Calculer la surface
+    }
+  });
+
+  const info = [];
+  if (totalDistance > 0) info.push(`Distance totale : ${totalDistance.toFixed(2)} km`);
+  if (totalArea > 0) info.push(`Surface totale : ${totalArea.toFixed(2)} m²`);
+  document.getElementById('info-bar').textContent = info.length > 0 ? info.join(' | ') : 'Dessinez pour mesurer.';
+}
+
+// Charger un GeoJSON dans DuckDB
+async function loadGeoJSONToDuckDB(url, tableName) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Erreur lors du chargement du GeoJSON : ${url}`);
+  const data = await response.json();
+
+  const features = data.features.map(feature => ({
+    geometry: JSON.stringify(feature.geometry),
+    properties: JSON.stringify(feature.properties).replace(/'/g, "''"),
+  }));
+
+  await conn.query(`CREATE TABLE IF NOT EXISTS ${tableName} (geometry JSON, properties JSON);`);
+  for (const feature of features) {
+    await conn.query(`INSERT INTO ${tableName} VALUES ('${feature.geometry}', '${feature.properties}');`);
+  }
+
+  return data;
+}
+
+// Afficher les couches sur la carte
+function displayLayers() {
+  // Provinces
+  map.addSource('provinces-layer', { type: 'geojson', data: provincesData });
   map.addLayer({
-    id: 'drawings-layer',
-    type: 'line',
-    source: 'drawings',
+    id: 'provinces-fill',
+    type: 'fill',
+    source: 'provinces-layer',
     paint: {
-      'line-color': '#0074D9',
-      'line-width': 2,
+      'fill-color': ['get', 'fillColor'],
+      'fill-opacity': 0.4,
+    },
+  });
+  map.addLayer({
+    id: 'provinces-borders',
+    type: 'line',
+    source: 'provinces-layer',
+    paint: {
+      'line-color': '#000000',
+      'line-width': 1.5,
     },
   });
 
-  map.on('click', (e) => handleMapClick(e));
-});
+  // Routes nationales
+  map.addSource('national-routes', { type: 'geojson', data: nationalRoutesData });
+  map.addLayer({
+    id: 'national-routes',
+    type: 'line',
+    source: 'national-routes',
+    paint: { 'line-color': '#0000FF', 'line-width': 2 },
+  });
 
-// Gérer les clics sur la carte
-function handleMapClick(e) {
-  if (activeMode === 'draw') {
-    handleDraw(e.lngLat);
-  } else if (activeMode === 'measure') {
-    handleMeasure(e.lngLat);
+  // Routes provinciales
+  map.addSource('provincial-routes', { type: 'geojson', data: provincialRoutesData });
+  map.addLayer({
+    id: 'provincial-routes',
+    type: 'line',
+    source: 'provincial-routes',
+    paint: { 'line-color': '#FFA500', 'line-width': 2 },
+  });
+
+  // Bâtiments endommagés
+  map.addSource('damaged-buildings', { type: 'geojson', data: damagedBuildingsData });
+  map.addLayer({
+    id: 'damaged-buildings',
+    type: 'circle',
+    source: 'damaged-buildings',
+    paint: { 'circle-color': '#FF0000', 'circle-radius': 5 },
+  });
+
+  // Bâtiments non touchés
+  map.addSource('untouched-buildings', { type: 'geojson', data: untouchedBuildingsData });
+  map.addLayer({
+    id: 'untouched-buildings',
+    type: 'circle',
+    source: 'untouched-buildings',
+    paint: { 'circle-color': '#00FF00', 'circle-radius': 4 },
+  });
+}
+
+// Mettre à jour les compteurs de bâtiments et le graphe
+async function updateBuildingCounts(provinceName) {
+  let damagedCount = 0;
+  let untouchedCount = 0;
+
+  if (provinceName) {
+    damagedCount = await conn.query(`
+      SELECT COUNT(*) AS count
+      FROM damagedprov_data
+      WHERE properties->>'Nom_Provin' = '${provinceName}'
+    `).then(res => Number(res.toArray()[0].count)); // Convert BigInt to Number
+
+    untouchedCount = await conn.query(`
+      SELECT COUNT(*) AS count
+      FROM nntoucheprov_data
+      WHERE properties->>'Nom_Provin' = '${provinceName}'
+    `).then(res => Number(res.toArray()[0].count)); // Convert BigInt to Number
   }
+
+  const infoBar = document.getElementById('info-bar');
+  infoBar.textContent = `Province : ${provinceName || 'Toutes'} | Bâtiments touchés : ${damagedCount} | Bâtiments non touchés : ${untouchedCount}`;
+
+  updateBuildingChart(damagedCount, untouchedCount, provinceName || 'Toutes');
 }
 
-// Gestion du dessin
-function handleDraw(lngLat) {
-  tempCoordinates.push([lngLat.lng, lngLat.lat]);
-  updateDrawings();
-}
+// Mettre à jour ou créer un graphique avec une taille réduite
+function updateBuildingChart(damagedCount, untouchedCount, provinceName) {
+  const ctx = document.getElementById('building-chart').getContext('2d');
 
-function updateDrawings() {
-  if (tempCoordinates.length > 1) {
-    drawings.features = [
-      {
-        type: 'Feature',
-        geometry: {
-          type: 'Polygon',
-          coordinates: [tempCoordinates.concat([tempCoordinates[0]])], // Fermer le polygone
+  // Redimensionner le canvas
+  const canvas = document.getElementById('building-chart');
+  canvas.width = 300;  // Largeur réduite
+  canvas.height = 200; // Hauteur réduite
+
+  if (buildingChart) {
+    buildingChart.data.datasets[0].data = [damagedCount, untouchedCount];
+    buildingChart.options.plugins.title.text = `Statistiques pour ${provinceName}`;
+    buildingChart.update();
+  } else {
+    buildingChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: ['Touchés', 'Non Touchés'],
+        datasets: [{
+          label: 'Nombre de bâtiments',
+          data: [damagedCount, untouchedCount],
+          backgroundColor: ['#FF0000', '#00FF00'],
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,  // Permet de redimensionner selon la taille définie
+        aspectRatio: 1,              // Ratio de la taille
+        plugins: {
+          title: {
+            display: true,
+            text: `Statistiques pour ${provinceName}`,
+          },
+          legend: { display: false },
         },
       },
-    ];
-  }
-  map.getSource('drawings').setData(drawings);
-}
-
-// Gestion de la mesure
-function handleMeasure(lngLat) {
-  if (tempCoordinates.length > 0) {
-    const lastPoint = tempCoordinates[tempCoordinates.length - 1];
-    const distance = turf.distance(turf.point(lastPoint), turf.point([lngLat.lng, lngLat.lat]), {
-      units: 'kilometers',
     });
-    alert(`Distance mesurée : ${distance.toFixed(2)} km`);
   }
-  tempCoordinates.push([lngLat.lng, lngLat.lat]);
 }
 
-// Effacer les dessins
-function clearDrawings() {
-  drawings.features = [];
-  tempCoordinates = [];
-  map.getSource('drawings').setData(drawings);
+// Remplir le menu déroulant des provinces
+function populateProvinceDropdown(provinceNames) {
+  const select = document.getElementById('province-select');
+  provinceNames.forEach(name => {
+    const option = document.createElement('option');
+    option.value = name;
+    option.textContent = name;
+    select.appendChild(option);
+  });
+
+  select.addEventListener('change', async (e) => {
+    const provinceName = e.target.value || null;
+    const filter = provinceName ? ['==', ['get', 'Nom_Provin'], provinceName] : null;
+    map.setFilter('provinces-fill', filter);
+
+    updateBuildingCounts(provinceName);
+  });
 }
 
-// Désactiver tous les modes actifs
-function disableAllModes() {
-  activeMode = null;
-  tempCoordinates = [];
+// Initialisation des données et de la carte
+async function init() {
+  db = new duckdb.Database();
+  conn = db.connect();
+
+  provincesData = await loadGeoJSONToDuckDB('provinces.geojson', 'provinces');
+  damagedBuildingsData = await loadGeoJSONToDuckDB('damaged_buildings.geojson', 'damagedbuildings');
+  untouchedBuildingsData = await loadGeoJSONToDuckDB('untouched_buildings.geojson', 'untouchedbuildings');
+  nationalRoutesData = await loadGeoJSONToDuckDB('national_routes.geojson', 'nationalroutes');
+  provincialRoutesData = await loadGeoJSONToDuckDB('provincial_routes.geojson', 'provincialroutes');
+
+  displayLayers();
+  populateProvinceDropdown(['Province1', 'Province2', 'Province3']);
+  initMap();
+  addMeasurementTool();
 }
 
-// Gestion des boutons
-document.getElementById('draw-polygon').addEventListener('click', () => {
-  disableAllModes();
-  activeMode = 'draw';
-});
-
-document.getElementById('measure-tool').addEventListener('click', () => {
-  disableAllModes();
-  activeMode = 'measure';
-});
-
-document.getElementById('clear-drawings').addEventListener('click', () => {
-  disableAllModes();
-  clearDrawings();
-});
+init();

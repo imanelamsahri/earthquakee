@@ -1,51 +1,101 @@
+Partager
+
+
+Vous avez dit :
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Carte Interactive avec Mapbox</title>
-  <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet">
+  <title>Carte Interactive avec Statistiques</title>
+  <!-- Mapbox CSS -->
+  <link href="https://api.mapbox.com/mapbox-gl-js/v2.14.1/mapbox-gl.css" rel="stylesheet">
+  <!-- Mapbox Draw CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css" rel="stylesheet">
   <style>
     body {
       margin: 0;
-      display: flex;
-      height: 100vh;
+      font-family: Arial, sans-serif;
     }
+
     #map {
-      flex: 1;
+      width: 100%;
+      height: 70vh;
     }
-    #tools {
-      position: absolute;
-      top: 10px;
-      left: 10px;
+
+    #controls {
+      margin: 10px;
       display: flex;
-      gap: 10px;
-      background-color: white;
+      justify-content: space-between;
+      align-items: center;
       padding: 10px;
-      border-radius: 5px;
-      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-    }
-    .tool-button {
-      cursor: pointer;
-      padding: 5px 10px;
-      border: 1px solid #ddd;
-      border-radius: 3px;
       background-color: #f8f9fa;
+      border: 1px solid #ddd;
     }
-    .tool-button:hover {
-      background-color: #e9ecef;
+
+    select, #info-bar, button {
+      padding: 10px;
+      font-size: 16px;
+      margin: 0 5px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+    }
+
+    button {
+      cursor: pointer;
+      background-color: #007bff;
+      color: white;
+    }
+
+    button:hover {
+      background-color: #0056b3;
+    }
+
+    #info-bar {
+      flex-grow: 1;
+      text-align: center;
+    }
+
+    #stats-container {
+      margin: 10px;
+      padding: 10px;
+      background-color: #f9f9f9;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+    }
+
+    #chart-container {
+      margin-top: 20px;
+    }
+
+    canvas {
+      max-width: 100%;
     }
   </style>
 </head>
 <body>
-  <div id="map"></div>
-  <div id="tools">
-    <button id="draw-polygon" class="tool-button">✏️ Dessiner</button>
-    <button id="measure-tool" class="tool-button">📏 Mesurer</button>
-    <button id="clear-drawings" class="tool-button">🗑️ Effacer</button>
+  <h1 style="text-align: center; margin: 20px;">Carte Interactive avec Statistiques</h1>
+  <div id="controls">
+    <select id="province-select">
+      <option value="">-- Toutes les provinces --</option>
+    </select>
+    <button id="styleButton">Changer le style</button>
+    <div id="info-bar">Chargement des données...</div>
   </div>
-  <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@turf/turf"></script>
-  <script src="try.js"></script>
+  <div id="map"></div>
+  <div id="stats-container">
+    <div id="chart-container">
+      <canvas id="building-chart"></canvas>
+    </div>
+  </div>
+
+  <!-- Mapbox GL JS -->
+  <script src="https://api.mapbox.com/mapbox-gl-js/v2.14.1/mapbox-gl.js"></script>
+  <!-- Mapbox Draw -->
+  <script src="https://cdn.jsdelivr.net/npm/@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.min.js"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Votre Script JS -->
+  <script type="module" src="try.js"></script>
 </body>
-</html>
+</html> 
